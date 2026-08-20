@@ -1,0 +1,56 @@
+[project]
+name = "agentcore"
+version = "1.0.0"
+description = "A ReAct agent backend: sessions, tools, two-tier memory, background execution and live SSE traces."
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    # --- web ---
+    "fastapi>=0.115.6",
+    "uvicorn[standard]>=0.34.0",
+    "python-multipart>=0.0.20",
+    "sse-starlette>=2.2.1",
+    # --- data ---
+    "sqlalchemy[asyncio]>=2.0.36,<3",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0,<2",
+    "pgvector>=0.3.6",
+    # --- config / auth ---
+    "pydantic>=2.10.4,<3",
+    "pydantic-settings>=2.7.0",
+    "email-validator>=2.2.0",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    # passlib 1.7.4 reads bcrypt.__about__, which bcrypt 4.1 removed.
+    "bcrypt>=4.0.1,<4.1",
+    # --- infra ---
+    "redis>=5.2.1,<7",
+    "celery[redis]>=5.4.0,<6",
+    # --- llm ---
+    # The brief specifies OpenAI SDK v1; the 2.x client is a different surface.
+    "openai>=1.59.6,<2",
+    "scalar-fastapi>=1.8.2",
+    "structlog>=26.1.0",
+    "starlette>=1.6.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4,<9",
+    "pytest-asyncio>=0.25.0",
+    "httpx>=0.28.1",
+    "aiosqlite>=0.20.0",
+    "fakeredis>=2.26.2",
+]
+
+[tool.uv]
+# AgentCore is an application, not a distributable library: uv manages the
+# environment and the lockfile, but there is nothing to build or install.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning"]

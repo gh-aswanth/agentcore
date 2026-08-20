@@ -1,0 +1,49 @@
+# Development overlay. Compose loads this automatically on top of
+# docker-compose.yml, so `docker compose up` gives you live-reloading source.
+#
+#   docker compose up                         # dev: edit code, no rebuild
+#   docker compose -f docker-compose.yml up    # exactly what ships in the image
+#
+# Only the source is mounted, read-only. The virtualenv stays inside the image,
+# so a dependency change still needs `docker compose build` — the one thing a
+# bind mount cannot paper over, and it is better for that to fail loudly than to
+# run against a stale environment.
+#
+# Commands are given in exec form on purpose. A YAML `>` block whose
+# continuation lines are indented further than its first line keeps the
+# newlines rather than folding them, and the shell then treats each line as a
+# separate command — which silently drops everything after the first one.
+
+services:
+  api:
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --loop uvloop --reload --reload-dir /code/app
+    environment:
+      # macOS bind mounts do not propagate inotify events into the container, so
+      # the watcher has to poll. Costs a little CPU; without it nothing reloads
+      # and the failure is silent.
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./app:/code/app:ro
+      - ./alembic.ini:/code/alembic.ini:ro
+
+  worker:
+    # Celery 5 dropped --autoreload, so watchfiles restarts the worker instead.
+    command:
+      - watchfiles
+      - --filter
+      - python
+      - celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+      - /code/app
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./app:/code/app:ro
+      - ./alembic.ini:/code/alembic.ini:ro
+
+  tests:
+    volumes:
+      - ./app:/code/app:ro
+      - ./pyproject.toml:/code/pyproject.toml:ro
