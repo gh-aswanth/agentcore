@@ -1,8 +1,5 @@
 # NOTES
 
-The three things the brief asks for are §1, §2 and §7. Everything between them is
-the reasoning behind decisions a reviewer is likely to question.
-
 ---
 
 ## 1 · Agent loop design
