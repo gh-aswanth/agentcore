@@ -6,6 +6,9 @@ allowlist, a background LLM↔tool loop that persists every step, two-tier memor
 
 FastAPI · SQLAlchemy 2 (async) · PostgreSQL 16 + pgvector · Redis 7 · Celery 5 · OpenAI SDK v1
 
+<img width="950" height="718" alt="image" src="https://github.com/user-attachments/assets/5aa58acb-d5f0-4c56-877e-6f399c9c0470" />
+
+
 ## Quickstart
 
 ```bash
