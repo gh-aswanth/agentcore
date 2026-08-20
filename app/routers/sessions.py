@@ -3,7 +3,7 @@ from sqlalchemy import select
 
 from app.core.dependencies import CurrentUser, DbSession
 from app.core.logging import bind, get_logger
-from app.models.agent import AgentSession
+from app.models.agent import AgentRun, AgentSession
 from app.schemas.agent import AgentSessionCreate, AgentSessionDetail, AgentSessionOut
 from app.schemas.errors import AUTHENTICATED, OWNED, UNPROCESSABLE
 
@@ -74,13 +74,22 @@ async def create_session(body: AgentSessionCreate, user: CurrentUser, db: DbSess
 )
 async def get_session(session_id: str, user: CurrentUser, db: DbSession):
     session = await get_owned_session(db, session_id, user.id)
+    # LIMIT 20 in the database rather than sorting session.runs in Python: the
+    # relationship would load every run this session has ever had just to throw
+    # all but the newest twenty away.
+    recent = (
+        select(AgentRun)
+        .where(AgentRun.session_id == session.id)
+        .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
+        .limit(20)
+    )
     return AgentSessionDetail(
         id=session.id,
         name=session.name,
         system_prompt=session.system_prompt,
         tools_enabled=session.tools_enabled,
         created_at=session.created_at,
-        runs=sorted(session.runs, key=lambda r: r.created_at, reverse=True)[:20],
+        runs=list((await db.execute(recent)).scalars()),
     )
 
 
@@ -93,7 +102,7 @@ async def get_session(session_id: str, user: CurrentUser, db: DbSession):
 )
 async def delete_session(session_id: str, user: CurrentUser, db: DbSession):
     session = await get_owned_session(db, session_id, user.id)
-    await db.delete(session)          # cascades to runs and their steps
+    await db.delete(session)          # ON DELETE CASCADE clears runs and steps
     await db.commit()
 
     bind(session_id=session_id)

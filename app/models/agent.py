@@ -58,8 +58,16 @@ class AgentSession(Base):
     tools_enabled: Mapped[list[str]] = mapped_column(JsonType, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    # lazy="raise" rather than an eager loader: a session's runs are wanted by
+    # exactly one endpoint, and eager-loading them there dragged every run's
+    # entire trace into every query that touched a session. Endpoints that want
+    # runs ask for them explicitly. passive_deletes hands the cascade to the
+    # ON DELETE CASCADE on the FK, so DELETE does not need the collection either.
     runs: Mapped[list["AgentRun"]] = relationship(
-        back_populates="session", cascade="all, delete-orphan", lazy="selectin"
+        back_populates="session",
+        cascade="all, delete-orphan",
+        lazy="raise",
+        passive_deletes=True,
     )
 
 
@@ -79,11 +87,12 @@ class AgentRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     celery_task_id: Mapped[str | None] = mapped_column(String(155), nullable=True)
 
-    session: Mapped["AgentSession"] = relationship(back_populates="runs", lazy="selectin")
+    session: Mapped["AgentSession"] = relationship(back_populates="runs", lazy="raise")
     steps: Mapped[list["RunStep"]] = relationship(
         back_populates="run",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="raise",
+        passive_deletes=True,
         order_by="RunStep.occurred_at",
     )
 
@@ -101,4 +110,4 @@ class RunStep(Base):
     payload: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    run: Mapped["AgentRun"] = relationship(back_populates="steps")
+    run: Mapped["AgentRun"] = relationship(back_populates="steps", lazy="raise")

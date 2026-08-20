@@ -16,6 +16,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 
 import fakeredis.aioredis  # noqa: E402
+from sqlalchemy import event  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.agent import planner  # noqa: E402
@@ -40,10 +41,35 @@ OFFLINE_TABLES = [
 @pytest.fixture
 async def engine():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+    # SQLite ignores ON DELETE CASCADE unless this pragma is on, and the models
+    # use passive_deletes=True — without it the offline suite would report a
+    # successful delete while orphan rows survive, which Postgres would not do.
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enforce_foreign_keys(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=OFFLINE_TABLES)
     yield engine
     await engine.dispose()
+
+
+@pytest.fixture
+def captured_sql(engine):
+    """Every statement the engine runs, normalised to one line. Lets a test
+    assert what a hot endpoint does *not* query, which is the only way a
+    reintroduced eager load gets caught — it changes no response body."""
+    statements: list[str] = []
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(" ".join(statement.split()))
+
+    yield statements
+    event.remove(engine.sync_engine, "before_cursor_execute", _record)
 
 
 @pytest.fixture

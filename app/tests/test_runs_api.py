@@ -1,11 +1,14 @@
 """T-6 — API surface: auth, tool validation, and user isolation."""
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
 
 from app.agent.tools import TOOL_REGISTRY
 from app.core.dependencies import get_db, get_redis
 from app.main import app
-from app.models.agent import AgentRun, AgentSession, RunStatus
+from app.models.agent import AgentRun, AgentSession, RunStatus, RunStep
 
 
 @pytest.fixture
@@ -151,7 +154,7 @@ async def test_user_b_gets_404_not_403_on_user_a_resources(client, db):
     assert (await client.get(f"/sessions/{session_id}", headers=headers_a)).status_code == 200
 
 
-async def test_status_reports_step_count_without_loading_steps(client, db):
+async def test_status_reports_step_count_without_loading_steps(client, db, captured_sql):
     headers = await register(client, "status@example.com")
     session_id = (
         await client.post("/sessions", json={"name": "S"}, headers=headers)
@@ -160,13 +163,102 @@ async def test_status_reports_step_count_without_loading_steps(client, db):
         await client.post(f"/sessions/{session_id}/run", json={"message": "hi"}, headers=headers)
     ).json()["run_id"]
 
+    empty = await client.get(f"/runs/{run_id}/status", headers=headers)
+    assert empty.status_code == 200
+    assert empty.json()["step_count"] == 0
+    assert empty.json()["status"] == "queued"
+    assert empty.json()["tokens_used"] == 0
+
+    # A trace big enough that loading it would be the point of the endpoint.
+    for index in range(25):
+        db.add(
+            RunStep(
+                run_id=run_id,
+                step_type="llm_call",
+                payload={"filler": "x" * 500, "index": index},
+            )
+        )
+    await db.commit()
+
+    captured_sql.clear()
     response = await client.get(f"/runs/{run_id}/status", headers=headers)
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "queued"
-    assert body["step_count"] == 0
-    assert body["tokens_used"] == 0
+    assert response.json()["step_count"] == 25
+    # The COUNT joins run_steps; nothing may *select* its columns. An eager
+    # loader on AgentRun.steps would add exactly such a statement here and
+    # leave the response body identical.
+    assert not [s for s in captured_sql if s.startswith("SELECT run_steps.")], captured_sql
+
+
+async def test_session_detail_returns_the_newest_20_runs_without_their_traces(
+    client, db, captured_sql
+):
+    headers = await register(client, "detail@example.com")
+    session_id = (
+        await client.post("/sessions", json={"name": "S"}, headers=headers)
+    ).json()["id"]
+
+    # 25 runs, each with a step, so both the run cap and the trace matter.
+    for index in range(25):
+        run = AgentRun(
+            session_id=session_id,
+            user_message=f"m{index}",
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=index),
+        )
+        db.add(run)
+        await db.flush()
+        db.add(RunStep(run_id=run.id, step_type="llm_call", payload={"i": index}))
+    await db.commit()
+
+    captured_sql.clear()
+    response = await client.get(f"/sessions/{session_id}", headers=headers)
+
+    assert response.status_code == 200
+    runs = response.json()["runs"]
+    assert len(runs) == 20
+    assert [r["user_message"] for r in runs[:3]] == ["m24", "m23", "m22"]
+    assert not [s for s in captured_sql if s.startswith("SELECT run_steps.")], captured_sql
+
+
+async def test_listing_sessions_does_not_load_their_runs(client, db, captured_sql):
+    headers = await register(client, "list@example.com")
+    for name in ("A", "B", "C"):
+        session_id = (
+            await client.post("/sessions", json={"name": name}, headers=headers)
+        ).json()["id"]
+        db.add(AgentRun(session_id=session_id, user_message="hi"))
+    await db.commit()
+
+    captured_sql.clear()
+    response = await client.get("/sessions", headers=headers)
+
+    assert response.status_code == 200
+    assert len(response.json()) == 3
+    # The list schema exposes no runs, so nothing should fetch them.
+    assert not [s for s in captured_sql if s.startswith("SELECT agent_runs.")], captured_sql
+    assert not [s for s in captured_sql if s.startswith("SELECT run_steps.")], captured_sql
+
+
+async def test_deleting_a_session_cascades_to_its_runs_and_steps(client, db):
+    """passive_deletes hands this to the FK, so it is the database doing the
+    cascade here, not the ORM walking loaded collections."""
+    headers = await register(client, "cascade@example.com")
+    session_id = (
+        await client.post("/sessions", json={"name": "S"}, headers=headers)
+    ).json()["id"]
+    run = AgentRun(session_id=session_id, user_message="hi")
+    db.add(run)
+    await db.flush()
+    db.add(RunStep(run_id=run.id, step_type="llm_call", payload={}))
+    await db.commit()
+
+    assert (await client.delete(f"/sessions/{session_id}", headers=headers)).status_code == 204
+
+    db.expunge_all()
+    assert (await db.execute(select(func.count(AgentSession.id)))).scalar_one() == 0
+    assert (await db.execute(select(func.count(AgentRun.id)))).scalar_one() == 0
+    assert (await db.execute(select(func.count(RunStep.id)))).scalar_one() == 0
 
 
 async def test_cancelling_a_terminal_run_returns_409(client, db):

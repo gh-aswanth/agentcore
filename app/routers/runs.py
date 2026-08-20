@@ -122,9 +122,10 @@ async def create_run(
     responses=OWNED,
 )
 async def run_status(run_id: str, user: CurrentUser, db: DbSession):
-    # C-11.4 — step_count is a COUNT projection, not len(run.steps). The
-    # supplied lazy='selectin' would otherwise load the entire trace on every
-    # poll, and clients poll every second.
+    # C-11.4 — step_count is a COUNT projection, not len(run.steps). Clients
+    # poll this every second; the trace must not ride along. AgentRun.steps is
+    # lazy="raise", so a later len(run.steps) here fails loudly instead of
+    # quietly reintroducing that load.
     stmt = (
         select(AgentRun, func.count(RunStep.id))
         .join(AgentSession, AgentRun.session_id == AgentSession.id)
