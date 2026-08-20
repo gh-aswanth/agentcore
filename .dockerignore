@@ -1,0 +1,11 @@
+.venv/
+.data/
+venv/
+.git/
+.idea/
+.jbeval/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+*.md

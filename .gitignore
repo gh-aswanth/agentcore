@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.py[cod]
+.venv/
+.data/
+venv/
+.uv-cache/
+.pytest_cache/
+.idea/
+.jbeval/
+*.egg-info/
+.DS_Store
